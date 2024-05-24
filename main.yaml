@@ -1,307 +1,305 @@
-Parameters:
-  KeyName:
-    Description: Nome da chave SSH para acessar as instâncias
-    Type: AWS::EC2::KeyPair::KeyName
-    Default: cloudkey
-
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Template para criar uma VPC com sub-redes públicas e privadas e uma instância EC2
 Resources:
-  VCPAws:
-    Type: AWS::EC2::VPC
+  
+  MyVPC:
+    Type: 'AWS::EC2::VPC'
     Properties:
-      CidrBlock: 10.0.0.0/16
-
+      CidrBlock: '10.0.0.0/16'
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+      Tags:
+        - Key: Name
+          Value: 'MyVPC'
+  
   InternetGateway:
-    Type: AWS::EC2::InternetGateway
-
-  GatewayAttachment:
-    Type: AWS::EC2::VPCGatewayAttachment
+    Type: 'AWS::EC2::InternetGateway'
     Properties:
-      VpcId: !Ref VCPAws
-      InternetGatewayId: !Ref InternetGateway
+      Tags:
+        - Key: Name
+          Value: 'InternetGateway'
 
+  AttachGateway:
+    Type: 'AWS::EC2::VPCGatewayAttachment'
+    Properties:
+      VpcId: !Ref MyVPC
+      InternetGatewayId: !Ref InternetGateway 
+  
   PublicSubnetA:
-    Type: AWS::EC2::Subnet
+    Type: 'AWS::EC2::Subnet'
     Properties:
-      VpcId: !Ref VCPAws
-      CidrBlock: 10.0.3.0/24
-      AvailabilityZone: us-east-1a
+      VpcId: !Ref MyVPC
+      CidrBlock: '10.0.1.0/24'
+      AvailabilityZone: sa-east-1a
       MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: 'PublicSubnetA'
 
   PublicSubnetB:
-    Type: AWS::EC2::Subnet
+    Type: 'AWS::EC2::Subnet'
     Properties:
-      VpcId: !Ref VCPAws
-      CidrBlock: 10.0.4.0/24
-      AvailabilityZone: us-east-1b
+      VpcId: !Ref MyVPC
+      CidrBlock: '10.0.2.0/24'
+      AvailabilityZone: sa-east-1b
       MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: 'PublicSubnetB'
 
   PublicRouteTable:
-    Type: AWS::EC2::RouteTable
+    Type: 'AWS::EC2::RouteTable'
     Properties:
-      VpcId: !Ref VCPAws
+      VpcId: !Ref MyVPC
+      Tags:
+        - Key: Name
+          Value: 'PublicRouteTable'
 
   PublicRoute:
-    Type: AWS::EC2::Route
+    Type: 'AWS::EC2::Route'
     Properties:
       RouteTableId: !Ref PublicRouteTable
-      DestinationCidrBlock: 0.0.0.0/0
+      DestinationCidrBlock: '0.0.0.0/0'
       GatewayId: !Ref InternetGateway
-
+    
   SubnetRouteTableAssociationA:
-    Type: AWS::EC2::SubnetRouteTableAssociation
+    Type: 'AWS::EC2::SubnetRouteTableAssociation'
     Properties:
       SubnetId: !Ref PublicSubnetA
       RouteTableId: !Ref PublicRouteTable
 
   SubnetRouteTableAssociationB:
-    Type: AWS::EC2::SubnetRouteTableAssociation
+    Type: 'AWS::EC2::SubnetRouteTableAssociation'
     Properties:
       SubnetId: !Ref PublicSubnetB
       RouteTableId: !Ref PublicRouteTable
-
+  
   PublicSecurityGroup:
-    Type: AWS::EC2::SecurityGroup
+    Type: 'AWS::EC2::SecurityGroup'
     Properties:
-      GroupDescription: Allow SSH, HTTP, and HTTPS traffic
-      VpcId: !Ref VCPAws
+      GroupDescription: 'Allow SSH, HTTP, and HTTPS traffic'
+      VpcId: !Ref MyVPC
       SecurityGroupIngress:
         - IpProtocol: tcp
-          FromPort: 22
-          ToPort: 22
-          CidrIp: 0.0.0.0/0
+          FromPort: '22'
+          ToPort: '22'
+          CidrIp: '0.0.0.0/0'
         - IpProtocol: tcp
-          FromPort: 80
-          ToPort: 80
-          CidrIp: 0.0.0.0/0
+          FromPort: '80'
+          ToPort: '80'
+          CidrIp: '0.0.0.0/0'
         - IpProtocol: tcp
-          FromPort: 443
-          ToPort: 443
-          CidrIp: 0.0.0.0/0
-        - IpProtocol: tcp
-          FromPort: 5000
-          ToPort: 5000
-          CidrIp: 0.0.0.0/0
-
-  AppLaunchConfig:
-    Type: AWS::AutoScaling::LaunchConfiguration
+          FromPort: '443'
+          ToPort: '443'
+          CidrIp: '0.0.0.0/0'
+      SecurityGroupEgress:
+        - IpProtocol: '-1'
+          FromPort: '-1'
+          ToPort: '-1'
+          CidrIp: '0.0.0.0/0'
+  
+  MyLaunchConfiguration:
+    Type: 'AWS::AutoScaling::LaunchConfiguration'
     Properties:
-      ImageId: ami-0bb84b8ffd87024d8
-      InstanceType: t2.medium
-      IamInstanceProfile: !Ref EC2InstanceProfile
-      KeyName: !Ref KeyName
-      SecurityGroups:
-        - Ref: PublicSecurityGroup
-      UserData: 
-        Fn::Base64: |
+      ImageId: ami-0c39cfd0df707c16c  # Substitua pelo ID da sua AMI preferida
+      InstanceType: t2.micro
+      SecurityGroups: 
+        - !Ref PublicSecurityGroup
+      IamInstanceProfile: !Ref MyInstanceProfile
+      UserData:
+        Fn::Base64: !Sub |
           #!/bin/bash
-          exec > >(tee /var/log/user-data.log|logger -t user-data -s 2>/dev/console) 2>&1
-          set -x
-          sudo su - ec2-user -c '
-          
-          # Função para instalar pacotes usando yum ou apt-get
-          install_packages() {
-            if command -v yum &> /dev/null; then
-              echo "Using yum to install packages"
-              sudo yum update -y
-              sudo yum install -y python3 python3-pip git
-            elif command -v apt-get &> /dev/null; then
-              echo "Using apt-get to install packages"
-              sudo apt-get update -y
-              sudo apt-get upgrade -y
-              sudo apt-get install -y python3-pip git
-            else
-              echo "Nenhum gerenciador de pacotes suportado encontrado (yum ou apt-get)"
-              exit 1
-            fi
-          }
+          yum update -y
+          yum install -y httpd
+          yum install -y python3
+          yum install -y python3-pip  # Adiciona o pip para instalar boto3
+          yum install -y mod_cgi
+          pip3 install boto3
+          systemctl start httpd
+          systemctl enable httpd
 
-          # Instalar pacotes
-          install_packages
+          echo "<html><body><h1>Hello World</h1></body></html>" > /var/www/html/index.html
 
-          # Clonar ou atualizar o repositório do GitHub
-          if [ -d "/home/ec2-user/app_aws_cloud" ]; then
-            cd /home/ec2-user/app_aws_cloud
-            git pull
-          else
-            git clone https://github.com/LaizFarias/app_aws_cloud.git /home/ec2-user/app_aws_cloud
-          fi
+          cat <<EOF > /var/www/html/form.html
+          <html>
+          <body>
+          <h1>Input Form</h1>
+          <form action="/cgi-bin/submit_form.py" method="post">
+            <label for="id">ID:</label><br>
+            <input type="text" id="id" name="id"><br>
+            <label for="value">Value:</label><br>
+            <input type="text" id="value" name="value"><br><br>
+            <input type="submit" value="Submit">
+          </form>
+          </body>
+          </html>
+          EOF
 
-          # Entrar no diretório clonado
-          cd /home/ec2-user/app_aws_cloud || exit
+          mkdir -p /var/www/cgi-bin
 
-          # Criar e ativar um ambiente virtual
-          python3 -m venv venv
-          source venv/bin/activate
+          cat <<EOF > /var/www/cgi-bin/submit_form.py
+          #!/usr/bin/env python3
+          import cgi
+          import boto3
 
-          # Instalar dependências do Python
-          pip install -r requirements.txt
+          print("Content-Type: text/html")
+          print()
 
-          # Adicionar o diretório de scripts ao PATH
-          export PATH=$PATH:/home/ec2-user/.local/bin
+          form = cgi.FieldStorage()
+          id = form.getvalue("id")
+          value = form.getvalue("value")
 
-          # Função para verificar se a tabela DynamoDB está pronta
-          check_dynamodb_table() {
-            aws dynamodb describe-table --table-name MyApplicationData --region us-east-1
-            return $?
-          }
+          if id and value:
+              dynamodb = boto3.resource('dynamodb', region_name='sa-east-1')
+              table = dynamodb.Table('MyTable')
+              response = table.put_item(Item={'Id': id, 'Value': value})
+              print("<html><body><h1>Data Submitted</h1></body></html>")
+          else:
+              print("<html><body><h1>Error: Both fields are required.</h1></body></html>")
+          EOF
 
-          # Esperar até que a tabela DynamoDB esteja pronta
-          until check_dynamodb_table; do
-            echo "Aguardando a tabela DynamoDB estar pronta..."
-            sleep 10
-          done
+          chmod +x /var/www/cgi-bin/submit_form.py
 
-          # Executar a aplicação
-          nohup python3 app.py > /home/ec2-user/app_aws_cloud/app.log 2>&1 &
-          '
-
-  AppAutoScalingGroup:
-    Type: AWS::AutoScaling::AutoScalingGroup
+          # Enable CGI in Apache
+          sed -i 's/^#\(AddHandler cgi-script .cgi\)$/AddHandler cgi-script .cgi .py/' /etc/httpd/conf/httpd.conf
+          sed -i 's/^#\(Options Indexes FollowSymLinks\)$/Options Indexes FollowSymLinks ExecCGI/' /etc/httpd/conf/httpd.conf
+          systemctl restart httpd
+  
+  MyAutoScallingGroup:
+    Type: 'AWS::AutoScaling::AutoScalingGroup'
     Properties:
       VPCZoneIdentifier:
-        - Ref: PublicSubnetA
-        - Ref: PublicSubnetB
-      LaunchConfigurationName:
-        Ref: AppLaunchConfig
-      MinSize: '3'
-      MaxSize: '4'
+        - !Ref PublicSubnetA
+        - !Ref PublicSubnetB
+      LaunchConfigurationName: !Ref MyLaunchConfiguration
+      MinSize: '1'
+      MaxSize: '3'
+      DesiredCapacity: '1'
       TargetGroupARNs:
-        - Ref: ProjectAppTargetGroup
-      HealthCheckGracePeriod: 300
-      HealthCheckType: ELB
-      MetricsCollection:
-        - Granularity: "1Minute"
+        - !Ref MyTargetGroup
       Tags:
         - Key: Name
-          Value: ASG-EC2-Instance
+          Value: 'MyAutoScalingGroup'
           PropagateAtLaunch: true
 
-  Scale:
-    Type: AWS::AutoScaling::ScalingPolicy
+  MyLoadBalancer:
+    Type: 'AWS::ElasticLoadBalancingV2::LoadBalancer'
     Properties:
-      AutoScalingGroupName:
-        Ref: AppAutoScalingGroup
+      Name: 'MyLoadBalancer'
+      Subnets:
+        - !Ref PublicSubnetA
+        - !Ref PublicSubnetB
+      SecurityGroups:
+        - !Ref PublicSecurityGroup
+      Scheme: internet-facing
+      LoadBalancerAttributes:
+        - Key: idle_timeout.timeout_seconds
+          Value: '60'
+      Tags:
+        - Key: Name
+          Value: 'MyLoadBalancer'
+
+  MyTargetGroup:
+    Type: 'AWS::ElasticLoadBalancingV2::TargetGroup'
+    Properties:
+      VpcId: !Ref MyVPC
+      Protocol: HTTP
+      Port: '80'
+      HealthCheckProtocol: HTTP
+      HealthCheckPort: '80'
+      HealthCheckPath: '/'
+      HealthCheckIntervalSeconds: '30'
+      HealthCheckTimeoutSeconds: '5'
+      HealthyThresholdCount: '5'
+      UnhealthyThresholdCount: '2'
+      TargetType: 'instance'
+      Tags:
+        - Key: Name
+          Value: 'MyTargetGroup'
+
+  MyListener:
+    Type: 'AWS::ElasticLoadBalancingV2::Listener'
+    Properties:
+      LoadBalancerArn: !Ref MyLoadBalancer
+      Protocol: HTTP
+      Port: '80'
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref MyTargetGroup
+
+  ScaleUpPolicy:
+    Type: 'AWS::AutoScaling::ScalingPolicy'
+    Properties:
+      AutoScalingGroupName: !Ref MyAutoScallingGroup
       PolicyType: SimpleScaling
       AdjustmentType: ChangeInCapacity
-      Cooldown: '300'
       ScalingAdjustment: '1'
-
-  ScaleDown:
-    Type: AWS::AutoScaling::ScalingPolicy
+      Cooldown: '300'
+  
+  ScaleDownPolicy:
+    Type: 'AWS::AutoScaling::ScalingPolicy'
     Properties:
-      AutoScalingGroupName:
-        Ref: AppAutoScalingGroup
+      AutoScalingGroupName: !Ref MyAutoScallingGroup
       PolicyType: SimpleScaling
       AdjustmentType: ChangeInCapacity
-      Cooldown: '300'
       ScalingAdjustment: '-1'
-
-  CpuAlarm:
-    Type: AWS::CloudWatch::Alarm
+      Cooldown: '300'
+  
+  MyCPUAlarmHigh:
+    Type: 'AWS::CloudWatch::Alarm'
     Properties:
-      AlarmDescription: "Alarme quando a CPU excede 70%"
-      MetricName: CPUUtilization
-      Namespace: AWS/EC2
+      AlarmDescription: 'Alarm if CPU too high or metric disappears indicating instance is down'
+      Namespace: 'AWS/EC2'
+      MetricName: 'CPUUtilization'
+      Dimensions:
+        - Name: AutoScalingGroupName
+          Value: !Ref MyAutoScallingGroup
       Statistic: Average
       Period: '300'
       EvaluationPeriods: '1'
-      Threshold: '70'
+      Threshold: '40'
       ComparisonOperator: GreaterThanOrEqualToThreshold
       AlarmActions:
-        - Ref: Scale
+        - !Ref ScaleUpPolicy
+      TreatMissingData: notBreaching
+
+  MyCPUAlarmLow:
+    Type: 'AWS::CloudWatch::Alarm'
+    Properties:
+      AlarmDescription: 'Alarm if CPU too low indicating serious problem'
+      Namespace: 'AWS/EC2'
+      MetricName: 'CPUUtilization'
       Dimensions:
         - Name: AutoScalingGroupName
-          Value: 
-            Ref: AppAutoScalingGroup
-
-  LowCpuAlarm:
-    Type: AWS::CloudWatch::Alarm
-    Properties:
-      AlarmDescription: "Alarme quando a CPU cai abaixo de 30%"
-      MetricName: CPUUtilization
-      Namespace: AWS/EC2
+          Value: !Ref MyAutoScallingGroup
       Statistic: Average
       Period: '300'
       EvaluationPeriods: '1'
       Threshold: '30'
       ComparisonOperator: LessThanOrEqualToThreshold
       AlarmActions:
-        - Ref: ScaleDown
-      Dimensions:
-        - Name: AutoScalingGroupName
-          Value: 
-            Ref: AppAutoScalingGroup
-
-  ProjectALB:
-    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
-    Properties:
-      Name: MyApplicationLoadBalancer
-      Subnets:
-        - !Ref PublicSubnetA
-        - !Ref PublicSubnetB
-      SecurityGroups:
-        - !Ref ALBSecurityGroup
-      Scheme: internet-facing
-      Type: application
-
-  ProjectALBListener:
-    Type: AWS::ElasticLoadBalancingV2::Listener
-    Properties:
-      DefaultActions:
-        - Type: forward
-          TargetGroupArn: !Ref ProjectAppTargetGroup
-      LoadBalancerArn: !Ref ProjectALB
-      Port: 80
-      Protocol: HTTP
-
-  ProjectAppTargetGroup:
-    Type: AWS::ElasticLoadBalancingV2::TargetGroup
-    Properties:
-      VpcId: !Ref VCPAws
-      Protocol: HTTP
-      Port: 5000
-      HealthCheckEnabled: true
-      HealthCheckIntervalSeconds: 30
-      HealthCheckPath: /health
-      HealthCheckProtocol: HTTP
-      HealthCheckTimeoutSeconds: 5
-      HealthyThresholdCount: 3
-      UnhealthyThresholdCount: 3
-
-  ALBSecurityGroup:
-    Type: AWS::EC2::SecurityGroup
-    Properties:
-      GroupDescription: Allow HTTP and HTTPS to ALB
-      VpcId: !Ref VCPAws
-      SecurityGroupIngress:
-        - IpProtocol: tcp
-          FromPort: 80
-          ToPort: 80
-          CidrIp: 0.0.0.0/0
-        - IpProtocol: tcp
-          FromPort: 443
-          ToPort: 443
-          CidrIp: 0.0.0.0/0
-
+        - !Ref ScaleDownPolicy
+      TreatMissingData: notBreaching
+  
   MyDynamoDBTable:
-    Type: AWS::DynamoDB::Table
+    Type: 'AWS::DynamoDB::Table'
     Properties:
-      TableName: MyApplicationData
-      BillingMode: PAY_PER_REQUEST
+      TableName: MyTable
       AttributeDefinitions:
-        - AttributeName: "Id"
-          AttributeType: "S"
+        - AttributeName: Id
+          AttributeType: S
       KeySchema:
-        - AttributeName: "Id"
-          KeyType: "HASH"
-
-  EC2InstanceProfile:
-    Type: AWS::IAM::InstanceProfile
-    Properties:
-      Roles: [!Ref EC2Role]
-
-  EC2Role:
-    Type: AWS::IAM::Role
+        - AttributeName: Id
+          KeyType: HASH
+      ProvisionedThroughput:
+        ReadCapacityUnits: 5
+        WriteCapacityUnits: 5
+      Tags:
+        - Key: Name
+          Value: MyDynamoDBTable
+    
+  MyInstanceRole:
+    Type: 'AWS::IAM::Role'
     Properties:
       AssumeRolePolicyDocument:
         Version: '2012-10-17'
@@ -316,14 +314,12 @@ Resources:
             Version: '2012-10-17'
             Statement:
               - Effect: Allow
-                Action: dynamodb:*
+                Action:
+                  - dynamodb:*
                 Resource: !GetAtt MyDynamoDBTable.Arn
 
-  DynamoDBEndpoint:
-    Type: AWS::EC2::VPCEndpoint
+  MyInstanceProfile:
+    Type: 'AWS::IAM::InstanceProfile'
     Properties:
-      VpcId: !Ref VCPAws
-      ServiceName: !Sub 'com.amazonaws.${AWS::Region}.dynamodb'
-      VpcEndpointType: Gateway
-      RouteTableIds:
-        - !Ref PublicRouteTable
+      Roles:
+        - !Ref MyInstanceRole
