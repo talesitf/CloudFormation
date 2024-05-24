@@ -1,2 +1,2 @@
 # CloudFormation
-Uma aplicação simples utilizando a AWS CloudFOrmation
+Uma aplicação simples utilizando a AWS CloudFormation
