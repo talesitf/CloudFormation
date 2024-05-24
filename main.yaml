@@ -1,0 +1,329 @@
+Parameters:
+  KeyName:
+    Description: Nome da chave SSH para acessar as instâncias
+    Type: AWS::EC2::KeyPair::KeyName
+    Default: cloudkey
+
+Resources:
+  VCPAws:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: 10.0.0.0/16
+
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+
+  GatewayAttachment:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref VCPAws
+      InternetGatewayId: !Ref InternetGateway
+
+  PublicSubnetA:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VCPAws
+      CidrBlock: 10.0.3.0/24
+      AvailabilityZone: us-east-1a
+      MapPublicIpOnLaunch: true
+
+  PublicSubnetB:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VCPAws
+      CidrBlock: 10.0.4.0/24
+      AvailabilityZone: us-east-1b
+      MapPublicIpOnLaunch: true
+
+  PublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VCPAws
+
+  PublicRoute:
+    Type: AWS::EC2::Route
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref InternetGateway
+
+  SubnetRouteTableAssociationA:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnetA
+      RouteTableId: !Ref PublicRouteTable
+
+  SubnetRouteTableAssociationB:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnetB
+      RouteTableId: !Ref PublicRouteTable
+
+  PublicSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Allow SSH, HTTP, and HTTPS traffic
+      VpcId: !Ref VCPAws
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: 0.0.0.0/0
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          CidrIp: 0.0.0.0/0
+        - IpProtocol: tcp
+          FromPort: 5000
+          ToPort: 5000
+          CidrIp: 0.0.0.0/0
+
+  AppLaunchConfig:
+    Type: AWS::AutoScaling::LaunchConfiguration
+    Properties:
+      ImageId: ami-0bb84b8ffd87024d8
+      InstanceType: t2.medium
+      IamInstanceProfile: !Ref EC2InstanceProfile
+      KeyName: !Ref KeyName
+      SecurityGroups:
+        - Ref: PublicSecurityGroup
+      UserData: 
+        Fn::Base64: |
+          #!/bin/bash
+          exec > >(tee /var/log/user-data.log|logger -t user-data -s 2>/dev/console) 2>&1
+          set -x
+          sudo su - ec2-user -c '
+          
+          # Função para instalar pacotes usando yum ou apt-get
+          install_packages() {
+            if command -v yum &> /dev/null; then
+              echo "Using yum to install packages"
+              sudo yum update -y
+              sudo yum install -y python3 python3-pip git
+            elif command -v apt-get &> /dev/null; then
+              echo "Using apt-get to install packages"
+              sudo apt-get update -y
+              sudo apt-get upgrade -y
+              sudo apt-get install -y python3-pip git
+            else
+              echo "Nenhum gerenciador de pacotes suportado encontrado (yum ou apt-get)"
+              exit 1
+            fi
+          }
+
+          # Instalar pacotes
+          install_packages
+
+          # Clonar ou atualizar o repositório do GitHub
+          if [ -d "/home/ec2-user/app_aws_cloud" ]; then
+            cd /home/ec2-user/app_aws_cloud
+            git pull
+          else
+            git clone https://github.com/LaizFarias/app_aws_cloud.git /home/ec2-user/app_aws_cloud
+          fi
+
+          # Entrar no diretório clonado
+          cd /home/ec2-user/app_aws_cloud || exit
+
+          # Criar e ativar um ambiente virtual
+          python3 -m venv venv
+          source venv/bin/activate
+
+          # Instalar dependências do Python
+          pip install -r requirements.txt
+
+          # Adicionar o diretório de scripts ao PATH
+          export PATH=$PATH:/home/ec2-user/.local/bin
+
+          # Função para verificar se a tabela DynamoDB está pronta
+          check_dynamodb_table() {
+            aws dynamodb describe-table --table-name MyApplicationData --region us-east-1
+            return $?
+          }
+
+          # Esperar até que a tabela DynamoDB esteja pronta
+          until check_dynamodb_table; do
+            echo "Aguardando a tabela DynamoDB estar pronta..."
+            sleep 10
+          done
+
+          # Executar a aplicação
+          nohup python3 app.py > /home/ec2-user/app_aws_cloud/app.log 2>&1 &
+          '
+
+  AppAutoScalingGroup:
+    Type: AWS::AutoScaling::AutoScalingGroup
+    Properties:
+      VPCZoneIdentifier:
+        - Ref: PublicSubnetA
+        - Ref: PublicSubnetB
+      LaunchConfigurationName:
+        Ref: AppLaunchConfig
+      MinSize: '3'
+      MaxSize: '4'
+      TargetGroupARNs:
+        - Ref: ProjectAppTargetGroup
+      HealthCheckGracePeriod: 300
+      HealthCheckType: ELB
+      MetricsCollection:
+        - Granularity: "1Minute"
+      Tags:
+        - Key: Name
+          Value: ASG-EC2-Instance
+          PropagateAtLaunch: true
+
+  Scale:
+    Type: AWS::AutoScaling::ScalingPolicy
+    Properties:
+      AutoScalingGroupName:
+        Ref: AppAutoScalingGroup
+      PolicyType: SimpleScaling
+      AdjustmentType: ChangeInCapacity
+      Cooldown: '300'
+      ScalingAdjustment: '1'
+
+  ScaleDown:
+    Type: AWS::AutoScaling::ScalingPolicy
+    Properties:
+      AutoScalingGroupName:
+        Ref: AppAutoScalingGroup
+      PolicyType: SimpleScaling
+      AdjustmentType: ChangeInCapacity
+      Cooldown: '300'
+      ScalingAdjustment: '-1'
+
+  CpuAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmDescription: "Alarme quando a CPU excede 70%"
+      MetricName: CPUUtilization
+      Namespace: AWS/EC2
+      Statistic: Average
+      Period: '300'
+      EvaluationPeriods: '1'
+      Threshold: '70'
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      AlarmActions:
+        - Ref: Scale
+      Dimensions:
+        - Name: AutoScalingGroupName
+          Value: 
+            Ref: AppAutoScalingGroup
+
+  LowCpuAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmDescription: "Alarme quando a CPU cai abaixo de 30%"
+      MetricName: CPUUtilization
+      Namespace: AWS/EC2
+      Statistic: Average
+      Period: '300'
+      EvaluationPeriods: '1'
+      Threshold: '30'
+      ComparisonOperator: LessThanOrEqualToThreshold
+      AlarmActions:
+        - Ref: ScaleDown
+      Dimensions:
+        - Name: AutoScalingGroupName
+          Value: 
+            Ref: AppAutoScalingGroup
+
+  ProjectALB:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Name: MyApplicationLoadBalancer
+      Subnets:
+        - !Ref PublicSubnetA
+        - !Ref PublicSubnetB
+      SecurityGroups:
+        - !Ref ALBSecurityGroup
+      Scheme: internet-facing
+      Type: application
+
+  ProjectALBListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref ProjectAppTargetGroup
+      LoadBalancerArn: !Ref ProjectALB
+      Port: 80
+      Protocol: HTTP
+
+  ProjectAppTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      VpcId: !Ref VCPAws
+      Protocol: HTTP
+      Port: 5000
+      HealthCheckEnabled: true
+      HealthCheckIntervalSeconds: 30
+      HealthCheckPath: /health
+      HealthCheckProtocol: HTTP
+      HealthCheckTimeoutSeconds: 5
+      HealthyThresholdCount: 3
+      UnhealthyThresholdCount: 3
+
+  ALBSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Allow HTTP and HTTPS to ALB
+      VpcId: !Ref VCPAws
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          CidrIp: 0.0.0.0/0
+
+  MyDynamoDBTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: MyApplicationData
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: "Id"
+          AttributeType: "S"
+      KeySchema:
+        - AttributeName: "Id"
+          KeyType: "HASH"
+
+  EC2InstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      Roles: [!Ref EC2Role]
+
+  EC2Role:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ec2.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: DynamoDBAccess
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: dynamodb:*
+                Resource: !GetAtt MyDynamoDBTable.Arn
+
+  DynamoDBEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      VpcId: !Ref VCPAws
+      ServiceName: !Sub 'com.amazonaws.${AWS::Region}.dynamodb'
+      VpcEndpointType: Gateway
+      RouteTableIds:
+        - !Ref PublicRouteTable
